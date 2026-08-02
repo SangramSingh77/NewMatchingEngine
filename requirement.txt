@@ -1,0 +1,91 @@
+================================================================================
+REQUIREMENTS SPECIFICATION: LIMIT ORDER MATCHING ENGINE
+================================================================================
+
+1. CORE FUNCTIONAL REQUIREMENTS
+--------------------------------------------------------------------------------
+* In-Memory Order Book: Maintain an in-memory representation of an order book 
+  tracking resting Buy and Sell limit orders.
+* Price-Time Priority (FIFO):
+  - Price Priority: Match incoming aggressive orders against resting orders 
+    offering the best price first (lowest price for Sell orders, highest price 
+    for Buy orders).
+  - Time Priority: If multiple resting orders share the exact same price level, 
+    match the oldest order first.
+* Crossing Condition: A match occurs when (Buy Order Price >= Sell Order Price).
+* Execution Price: Trades execute strictly at the resting order's price.
+* Unfilled Quantity: If an aggressive order is not fully filled after crossing 
+  available resting orders, the remaining quantity must be placed into the order 
+  book as a new resting order.
+
+
+2. INPUT PROTOCOL & PROCESSING
+--------------------------------------------------------------------------------
+* Interface: Read order messages sequentially from standard input (stdin).
+* Comments & Space: Lines starting with '//' or empty lines must be safely ignored.
+* Input Message Types:
+  1. AddOrderRequest (Type 0)
+     Format: 0,orderid,side,quantity,price
+     - msgtype  : 0
+     - orderid  : Unique positive integer
+     - side     : 0 (Buy) or 1 (Sell)
+     - quantity : Positive integer (shares/lots)
+     - price    : Decimal or integer representing target price
+  
+  2. CancelOrderRequest (Type 1)
+     Format: 1,orderid
+     - msgtype  : 1
+     - orderid  : Target order ID to remove from the order book
+
+
+3. OUTPUT PROTOCOL & PROCESSING
+--------------------------------------------------------------------------------
+* Interface: Write output messages sequentially to stdout. Log errors to stderr.
+* Execution Sequence: For EVERY matched pair of aggressive and resting orders, 
+  emit messages in this exact sequence:
+    1. TradeEvent (Type 2)
+    2. Aggressive Order Status (Type 3 if fully filled, Type 4 if partially filled)
+    3. Resting Order Status (Type 3 if fully filled, Type 4 if partially filled)
+
+* Output Message Types:
+  1. TradeEvent (Type 2)
+     Format: 2,quantity,price
+     - Emitted once per execution pair.
+
+  2. OrderFullyFilled (Type 3)
+     Format: 3,orderid
+     - Emitted when an order's remaining quantity hits 0. Order is removed from book.
+
+  3. OrderPartiallyFilled (Type 4)
+     Format: 4,orderid,remaining_quantity
+     - Emitted when an order has unexecuted quantity remaining after a trade.
+
+
+4. ROBUSTNESS & ERROR HANDLING
+--------------------------------------------------------------------------------
+* Zero Crashing Policy: No input sequence or malformed message may crash the app.
+* Malformed Input: Log unknown types or bad lines clearly to stderr 
+  (e.g., "Unknown message type: BADMESSAGE") and continue processing.
+* Invalid IDs: Gracefully log duplicate order IDs or cancellations for missing 
+  IDs to stderr without corrupting order book state.
+
+
+5. NON-FUNCTIONAL & SYSTEM CONSTRAINTS
+--------------------------------------------------------------------------------
+* Language Standard: C++14 or higher (Linux platform target).
+* Dependencies: NO third-party libraries permitted in core application code 
+  (standard C++ library only). Third-party test frameworks are permitted.
+* Performance Targets:
+  - Minimizing match lookup complexity: O(1) best-price checks.
+  - Minimizing fill removal complexity: O(1) removals for fully filled orders.
+  - Minimizing cancel complexity: O(1) removal via order ID index lookup.
+
+
+6. DELIVERABLES REQUIRED
+--------------------------------------------------------------------------------
+1. Source Code: Well-structured, clean C++ codebase with modular design.
+2. Build & Run Instructions: Documentation for building and executing on Linux.
+3. Testing Suite & Datasets: Supporting test datasets used during development.
+4. Architecture Writeup: Written description covering algorithmic complexity, 
+  trade-offs made, and proposed production-grade optimizations.
+================================================================================
