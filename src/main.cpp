@@ -1,15 +1,19 @@
-#include "matching_engine.hpp"
+#include "engine/matching_ticker.hpp"
+#include "harness/order_gateway.hpp"
 #include <iostream>
 #include <string>
 
-int main() {
-    nme::EventCallbacks cb;
-    // default callbacks print to stdout/stderr via the library's defaults, but we wire errors to cerr explicitly
-    cb.on_error = [](const std::string &e){ std::cerr << e << std::endl; };
-    nme::MatchingEngine eng(cb);
+int main(int argc, char** argv) {
+    (void)argc; (void)argv;
+    me::engine::MatchingTicker ticker;
+    ticker.start();
+
     std::string line;
     while (std::getline(std::cin, line)) {
-        eng.process_message_line(line);
+        me::harness::parse_input_line(line);
+        if (!ticker.running()) break;
     }
+
+    ticker.stop();
     return 0;
 }
