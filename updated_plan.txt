@@ -1,0 +1,302 @@
+=========================================================
+           MATCHING ENGINE PROJECT (V1)
+           Development & Implementation Plan
+=========================================================
+
+Project Goal
+------------
+
+Build a modular, low-latency Matching Engine prototype
+using Modern C++20/23.
+
+The primary objective is to learn and demonstrate
+
+- Clean software architecture
+- Modern C++ design
+- Compile-time programming
+- Data-oriented design
+- Cache-friendly data structures
+- Deterministic matching
+- Efficient memory management
+
+This project is NOT intended to be a complete exchange
+implementation.
+
+
+=========================================================
+Project Scope (V1)
+=========================================================
+
+In Scope
+
+✓ Modern C++20/23
+✓ Modular architecture
+✓ Single process application
+✓ Multiple instruments
+✓ Price-Time Priority (FIFO)
+✓ Limit Orders
+✓ In-memory Order Book
+✓ Object Pool
+✓ Compile-time configurable design
+✓ Unit Testing
+✓ Performance Benchmarking
+
+Out of Scope
+
+✗ FIX/OUCH protocol
+✗ Network programming
+✗ Persistent storage
+✗ Recovery & Snapshots
+✗ Active-Active implementation
+✗ Distributed deployment
+✗ Advanced order types
+✗ Market data protocols
+✗ Production monitoring
+✗ Regulatory features
+
+These features will only be considered during design,
+not implementation.
+
+
+=========================================================
+High Level Architecture
+=========================================================
+
+                ExchangeEngine
+                      │
+          ┌───────────┴────────────┐
+          │                        │
+          ▼                        ▼
+     ExchangeTimer           Partitioner
+                                     │
+                     ┌───────────────┴──────────────┐
+                     ▼                              ▼
+             MatchingEngineTicker           MatchingEngineTicker
+                     │                              │
+                     ▼                              ▼
+                 OrderBook                     OrderBook
+
+
+=========================================================
+Core Components
+=========================================================
+
+ExchangeEngine
+---------------
+Overall application coordinator.
+
+ExchangeTimer
+--------------
+Maintains exchange session state.
+
+Partitioner
+-----------
+Routes instruments to matching engines.
+
+MatchingEngineTicker
+--------------------
+Owns matching logic for assigned instruments.
+
+OrderBook
+---------
+Maintains Buy and Sell books.
+
+OrderPool
+---------
+Provides fixed-size memory allocation.
+
+AuctionManager
+--------------
+Basic placeholder for future auction support.
+
+
+=========================================================
+Order Book Design
+=========================================================
+
+Each Instrument
+
+    Buy Side
+    Sell Side
+
+Each Side
+
+    Price Index
+    Single Doubly Linked Order List
+
+PriceLevel
+
+- First Order
+- Last Order
+- Total Quantity
+- Order Count
+
+PriceLevel does NOT own another linked list.
+
+Orders remain inside one linked list per side.
+
+
+=========================================================
+Compile-Time Philosophy
+=========================================================
+
+Everything that never changes after compilation
+should be compile-time.
+
+Compile-Time
+
+- Number of partitions
+- Matching policy
+- Memory allocator
+- Queue implementation
+- Logging strategy
+- Threading strategy
+
+Startup Configuration
+
+- Instruments
+- Trading sessions
+- Exchange timings
+
+Runtime
+
+- Orders
+- Trades
+- Order books
+- Session state
+
+
+=========================================================
+Development Phases
+=========================================================
+
+Phase 1
+--------
+
+Project Foundation
+
+- Folder structure
+- CMake
+- Coding guidelines
+- Common utilities
+
+Phase 2
+--------
+
+Domain Model
+
+- Order
+- Trade
+- Instrument
+- PriceLevel
+- Events
+
+Phase 3
+--------
+
+Memory Infrastructure
+
+- Object Pool
+- Handle manager
+- Fixed containers
+
+Phase 4
+--------
+
+Order Book
+
+- Buy book
+- Sell book
+- Price index
+- Single linked list
+- Insert
+- Cancel
+- Modify
+
+Phase 5
+--------
+
+Matching Engine
+
+- FIFO matching
+- Partial fill
+- Complete fill
+- Remaining quantity insertion
+
+Phase 6
+--------
+
+Framework
+
+- ExchangeEngine
+- Partitioner
+- ExchangeTimer
+- AuctionManager (basic)
+
+Phase 7
+--------
+
+Testing
+
+- Unit tests
+- Integration tests
+- Performance benchmark
+
+
+=========================================================
+Modern C++ Focus
+=========================================================
+
+Use
+
+- constexpr
+- consteval (where useful)
+- Templates
+- Concepts
+- std::array
+- std::span
+- enum class
+- RAII
+- Strong typing
+- Object pools
+
+Avoid
+
+- Dynamic allocation in hot path
+- Exceptions in matching logic
+- Virtual functions in hot path
+- RTTI
+
+
+=========================================================
+Design Principles
+=========================================================
+
+1. Simplicity first.
+2. Correctness before optimization.
+3. Deterministic execution.
+4. Cache-friendly design.
+5. Compile-time over runtime.
+6. Single Responsibility Principle.
+7. Data-oriented programming.
+8. Extensible architecture.
+
+
+=========================================================
+Expected Outcome
+=========================================================
+
+At the end of Version 1 the project should provide
+
+✓ Modular architecture
+✓ Modern C++ implementation
+✓ Working in-memory order book
+✓ FIFO matching engine
+✓ Multiple instrument support
+✓ Compile-time configurable design
+✓ Unit tests
+✓ Performance benchmarks
+
+Version 1 is intended as a strong architectural and
+educational foundation rather than a production-ready
+exchange.
