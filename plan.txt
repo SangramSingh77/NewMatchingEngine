@@ -1,0 +1,99 @@
+Matching Engine Design - Crux
+
+1. High-Level Flow
+
+ExchangeEngine │ ├── OrderGateway │ │ │ ▼ │ RiskEngine │ │ │ ├──
+RejectionHandler │ │ │ └── Partitioner │ │ │ ├── MatchingEngineTicker-1
+│ ├── MatchingEngineTicker-2 │ └── MatchingEngineTicker-N │ ├──
+ExchangeTimer │ │ │ ▼ │ AuctionManager │ ├── TradePublisher ├──
+MDPublisher └── OrderStore
+
+2. Class List
+
+-   ExchangeEngine
+-   OrderGateway
+-   RiskEngine
+-   RejectionHandler
+-   ExchangeTimer
+-   AuctionManager
+-   Partitioner
+-   MatchingEngineTicker
+-   TradePublisher
+-   MDPublisher
+-   OrderStore
+
+3. One-Line Responsibilities
+
+ExchangeEngine - Overall orchestration, startup/shutdown, wiring, HA
+coordination.
+
+OrderGateway - Receive client requests and convert them to internal
+messages.
+
+RiskEngine - Validate incoming orders before matching.
+
+RejectionHandler - Process and publish rejected orders.
+
+ExchangeTimer - Maintain exchange sessions and generate session events.
+
+AuctionManager - Manage auction books, auction execution, and transition
+to continuous trading.
+
+Partitioner - Route requests to the correct MatchingEngineTicker.
+
+MatchingEngineTicker - Own matching logic and order books for assigned
+partition/symbol.
+
+TradePublisher - Publish executed trades.
+
+MDPublisher - Publish market data.
+
+OrderStore - Persist order lifecycle and support recovery.
+
+Compile-Time Design Philosophy
+
+Golden Rule: Anything that never changes during the lifetime of the
+binary should be decided at compile time.
+
+Compile-Time Decisions
+
+Engine Architecture - Number of partitions - Threading model - Queue
+implementation - Memory allocator - Locking strategy - Logging
+strategy - Active-Active / Standalone deployment
+
+Exchange Rules - Matching algorithm (FIFO, Pro-Rata, etc.) - Supported
+order types - Auction support - Tick-size policy - Price validation
+policy - Self-trade prevention policy
+
+Infrastructure - Publisher strategy - Persistence strategy - Replication
+strategy - Clock implementation - Recovery strategy
+
+Startup Configuration
+
+-   Trading sessions
+-   Exchange timings
+-   Symbol list
+-   Symbol-to-partition mapping
+-   Risk limits
+-   Circuit breakers
+-   Auction schedule
+
+Runtime State
+
+-   Current session
+-   Order books
+-   Orders
+-   Trades
+-   Positions
+-   Market status
+
+Core Design Principles
+
+1.  Single Responsibility Principle.
+2.  Deterministic matching for identical ordered input.
+3.  Compile-time decisions over runtime branching in the hot path.
+4.  Policy-based architecture for algorithms and infrastructure.
+5.  Keep the matching path lean and cache-friendly.
+6.  ExchangeEngine orchestrates; MatchingEngineTicker performs matching.
+7.  Scale horizontally through partitioning.
+8.  Add features through extension, not modification.
