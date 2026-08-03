@@ -1,244 +1,158 @@
 #include "matching_engine.hpp"
+
 #include <algorithm>
-#include <deque>
-#include <functional>
+#include <charconv>
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
 #include <iostream>
-#include <map>
-#include <optional>
-#include <sstream>
-#include <string>
-#include <unordered_map>
+#include <string_view>
+#include <utility>
 #include <vector>
 
-using namespace std;
-
 namespace nme {
+namespace {
 
-struct MatchingEngine::Impl {
-    EventCallbacks cb;
-    // simple incremental timestamp to maintain FIFO among same-price orders
-    uint64_t seq = 0;
+std::string_view Trim(std::string_view value) {
+    constexpr std::string_view whitespace{" \t\r\n"};
+    const auto first = value.find_first_not_of(whitespace);
+    if (first == std::string_view::npos) return {};
+    return value.substr(first, value.find_last_not_of(whitespace) - first + 1);
+}
 
-    struct Order {
-        int id;
-        Side side;
-        int qty;
-        double price;
-        uint64_t ts; // sequence
-    };
+bool ParseUnsigned(std::string_view value, std::uint64_t& result) {
+    if (value.empty()) return false;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), result);
+    return error == std::errc{} && end == value.data() + value.size() && result != 0;
+}
 
-    // Price -> deque of Orders (resting orders). For buys, highest price first in map ordering.
-    // We'll keep two maps with different comparators.
-    using BuyPriceMap = map<double, deque<Order>, greater<double>>;
-    using SellPriceMap = map<double, deque<Order>, less<double>>;
+bool ParsePrice(std::string_view value, Price& result) {
+    std::string text{value};
+    char* end = nullptr;
+    result = std::strtod(text.c_str(), &end);
+    return end == text.c_str() + text.size() && std::isfinite(result) && result > 0.0;
+}
 
-    BuyPriceMap buys;
-    SellPriceMap sells;
-
-    // Index order id -> location: side, price, index in deque isn't stable so store ts and iterate when removing.
-    struct OrderIndex { Side side; double price; uint64_t ts; };
-    unordered_map<int, OrderIndex> order_index;
-
-    Impl(EventCallbacks c) : cb(move(c)) {}
-
-    void log_error(const string &s) {
-        if (cb.on_error) cb.on_error(s);
-        else cerr << s << '\n';
-    }
-
-    void emit_trade(int qty, double price) {
-        if (cb.on_trade) cb.on_trade(qty, price);
-        else cout << "2," << qty << "," << price << '\n';
-    }
-    void emit_filled(int orderid) {
-        if (cb.on_filled) cb.on_filled(orderid);
-        else cout << "3," << orderid << '\n';
-    }
-    void emit_partial(int orderid, int remaining) {
-        if (cb.on_partially_filled) cb.on_partially_filled(orderid, remaining);
-        else cout << "4," << orderid << "," << remaining << '\n';
-    }
-
-    optional<Order> pop_resting_best(Side aggressive_side) {
-        // Not used directly
-        return {};
-    }
-
-    void add_resting_order(const Order &o) {
-        if (o.side == Side::Buy) {
-            buys[o.price].push_back(o);
-        } else {
-            sells[o.price].push_back(o);
-        }
-        order_index[o.id] = {o.side, o.price, o.ts};
-    }
-
-    // Remove resting order by id. Returns true if removed.
-    bool remove_resting_by_id(int orderid) {
-        auto it = order_index.find(orderid);
-        if (it == order_index.end()) return false;
-        Side side = it->second.side;
-        double price = it->second.price;
-        uint64_t ts = it->second.ts;
-        if (side == Side::Buy) {
-            auto mit = buys.find(price);
-            if (mit == buys.end()) return false;
-            auto &dq = mit->second;
-            auto dit = std::find_if(dq.begin(), dq.end(), [&](const Order &o){ return o.id == orderid && o.ts == ts; });
-            if (dit == dq.end()) return false;
-            dq.erase(dit);
-            if (dq.empty()) buys.erase(mit);
-        } else {
-            auto mit = sells.find(price);
-            if (mit == sells.end()) return false;
-            auto &dq = mit->second;
-            auto dit = std::find_if(dq.begin(), dq.end(), [&](const Order &o){ return o.id == orderid && o.ts == ts; });
-            if (dit == dq.end()) return false;
-            dq.erase(dit);
-            if (dq.empty()) sells.erase(mit);
-        }
-        order_index.erase(it);
-        return true;
-    }
-
-    void match_aggressive(Order aggressive) {
-        // aggressive is the incoming order; match against opposite book
-        if (aggressive.qty <= 0) return;
-        if (aggressive.side == Side::Buy) {
-            // match against sells: lowest price first; crossing condition: buy.price >= sell.price
-            while (aggressive.qty > 0 && !sells.empty()) {
-                auto sit = sells.begin();
-                double rest_price = sit->first;
-                if (aggressive.price < rest_price) break; // no crossing
-                auto &dq = sit->second;
-                // get oldest resting order
-                auto resting = dq.front();
-                int exec_qty = min(aggressive.qty, resting.qty);
-                // Execute at resting.price
-                emit_trade(exec_qty, resting.price);
-                // Update quantities
-                aggressive.qty -= exec_qty;
-                auto resting_id = resting.id;
-                resting.qty -= exec_qty;
-                // Aggressive status
-                if (aggressive.qty == 0) emit_filled(aggressive.id);
-                else emit_partial(aggressive.id, aggressive.qty);
-                // Resting status
-                if (resting.qty == 0) {
-                    emit_filled(resting_id);
-                    // remove resting from deque and index
-                    dq.pop_front();
-                    order_index.erase(resting_id);
-                    if (dq.empty()) sells.erase(sit);
-                } else {
-                    // update front order qty
-                    dq.front().qty = resting.qty;
-                    // update index not needed (qty not stored there)
-                    emit_partial(resting_id, resting.qty);
-                }
-            }
-        } else {
-            // aggressive is Sell: match against buys (highest first). crossing if buy.price >= sell.price
-            while (aggressive.qty > 0 && !buys.empty()) {
-                auto bit = buys.begin();
-                double rest_price = bit->first;
-                if (rest_price < aggressive.price) break;
-                auto &dq = bit->second;
-                auto resting = dq.front();
-                int exec_qty = min(aggressive.qty, resting.qty);
-                emit_trade(exec_qty, resting.price);
-                aggressive.qty -= exec_qty;
-                int resting_id = resting.id;
-                resting.qty -= exec_qty;
-                // Aggressive status
-                if (aggressive.qty == 0) emit_filled(aggressive.id);
-                else emit_partial(aggressive.id, aggressive.qty);
-                // Resting status
-                if (resting.qty == 0) {
-                    emit_filled(resting_id);
-                    dq.pop_front();
-                    order_index.erase(resting_id);
-                    if (dq.empty()) buys.erase(bit);
-                } else {
-                    dq.front().qty = resting.qty;
-                    emit_partial(resting_id, resting.qty);
-                }
-            }
-        }
-
-        // if remaining qty > 0, insert as new resting order
-        if (aggressive.qty > 0) {
-            // we must ensure order id is unique
-            if (order_index.find(aggressive.id) != order_index.end()) {
-                log_error("Duplicate order ID: " + to_string(aggressive.id));
-                return;
-            }
-            aggressive.ts = ++seq;
-            add_resting_order(aggressive);
-        }
-    }
-};
-
-MatchingEngine::MatchingEngine(EventCallbacks cb) : p(new Impl(cb)) {}
-
-void MatchingEngine::process_message_line(const string &line) {
-    // ignore comments starting with // and empty lines
-    string s = line;
-    // trim
-    auto first = s.find_first_not_of(" \t\r\n");
-    if (first == string::npos) return; // blank
-    if (s.substr(first,2) == "//") return;
-    // parse CSV tokens
-    vector<string> toks;
-    string tok;
-    stringstream ss(s);
-    while (getline(ss, tok, ',')) toks.push_back(tok);
-    if (toks.empty()) return;
-    // trim tokens
-    for (auto &t : toks) {
-        size_t a = t.find_first_not_of(" \t\r\n");
-        size_t b = t.find_last_not_of(" \t\r\n");
-        if (a == string::npos) t = ""; else t = t.substr(a, b - a + 1);
-    }
-    try {
-        int msgtype = stoi(toks[0]);
-        if (msgtype == 0) {
-            if (toks.size() != 5) { p->log_error("Malformed AddOrderRequest: " + line); return; }
-            int orderid = stoi(toks[1]);
-            int side = stoi(toks[2]);
-            int qty = stoi(toks[3]);
-            double price = stod(toks[4]);
-            if (qty <= 0 || orderid <= 0) { p->log_error("Invalid order values: " + line); return; }
-            add_order(orderid, side==0?Side::Buy:Side::Sell, qty, price);
-        } else if (msgtype == 1) {
-            if (toks.size() != 2) { p->log_error("Malformed CancelOrderRequest: " + line); return; }
-            int orderid = stoi(toks[1]);
-            cancel_order(orderid);
-        } else {
-            p->log_error("Unknown message type: " + toks[0]);
-        }
-    } catch (const exception &e) {
-        p->log_error(string("Malformed input: ") + e.what() + " -- " + line);
+std::vector<std::string_view> Split(std::string_view line) {
+    std::vector<std::string_view> fields;
+    while (true) {
+        const auto comma = line.find(',');
+        fields.push_back(Trim(line.substr(0, comma)));
+        if (comma == std::string_view::npos) return fields;
+        line.remove_prefix(comma + 1);
     }
 }
 
-void MatchingEngine::add_order(int orderid, Side side, int qty, double price) {
-    // check duplicates
-    if (p->order_index.find(orderid) != p->order_index.end()) {
-        p->log_error("Duplicate order ID: " + to_string(orderid));
+} // namespace
+
+MatchingEngine::MatchingEngine(EventCallbacks callbacks) : m_callbacks(std::move(callbacks)) {}
+
+void MatchingEngine::OnInput(const std::string& line) {
+    const std::string_view input = Trim(line);
+    if (input.empty() || input.rfind("//", 0) == 0) return;
+    const auto fields = Split(input);
+
+    if (fields[0] == "0") {
+        OrderId id = 0;
+        Quantity quantity = 0;
+        Price price = 0.0;
+        if (fields.size() != 5 || !ParseUnsigned(fields[1], id) || !ParseUnsigned(fields[3], quantity) ||
+            !ParsePrice(fields[4], price) || (fields[2] != "0" && fields[2] != "1")) {
+            Error("Malformed AddOrderRequest: " + line);
+            return;
+        }
+        OnAddOrder(id, fields[2] == "0" ? Side::Buy : Side::Sell, quantity, price);
         return;
     }
-    p->seq++;
-    Impl::Order o{orderid, side, qty, price, p->seq};
-    // aggressive order: attempt to match
-    p->match_aggressive(o);
+    if (fields[0] == "1") {
+        OrderId id = 0;
+        if (fields.size() != 2 || !ParseUnsigned(fields[1], id)) Error("Malformed CancelOrderRequest: " + line);
+        else OnCancelOrder(id);
+        return;
+    }
+    Error("Unknown message type: " + std::string(fields[0]));
 }
 
-void MatchingEngine::cancel_order(int orderid) {
-    bool removed = p->remove_resting_by_id(orderid);
-    if (!removed) {
-        p->log_error("Cancel failed, unknown order id: " + to_string(orderid));
+void MatchingEngine::OnAddOrder(OrderId order_id, Side side, Quantity quantity, Price price) {
+    if (order_id == 0 || quantity == 0 || !std::isfinite(price) || price <= 0.0) {
+        Error("Invalid AddOrderRequest for order ID: " + std::to_string(order_id));
+        return;
     }
+    if (m_order_manager.Get(order_id) != kInvalidOrderIndex) {
+        Error("Duplicate order ID: " + std::to_string(order_id));
+        return;
+    }
+    Order incoming{false, order_id, side, quantity, price};
+    Match(incoming);
+}
+
+void MatchingEngine::OnCancelOrder(OrderId order_id) {
+    const OrderIndex index = m_order_manager.Get(order_id);
+    if (index == kInvalidOrderIndex) Error("Cancel failed, unknown order ID: " + std::to_string(order_id));
+    else RemoveRestingOrder(index);
+}
+
+void MatchingEngine::Match(Order& incoming) {
+    const Side opposite = incoming.side == Side::Buy ? Side::Sell : Side::Buy;
+    while (incoming.quantity > 0) {
+        const auto resting_index = m_order_book.BestOrder(opposite);
+        if (!resting_index.has_value()) break;
+        const Order& resting = m_order_pool.Get(*resting_index);
+        const bool crosses = incoming.side == Side::Buy ? incoming.price >= resting.price : resting.price >= incoming.price;
+        if (!crosses) break;
+        Execute(incoming, *resting_index);
+    }
+    if (incoming.quantity > 0) Rest(incoming);
+}
+
+void MatchingEngine::Execute(Order& incoming, OrderIndex resting_index) {
+    Order& resting = m_order_pool.Get(resting_index);
+    const Quantity quantity = std::min(incoming.quantity, resting.quantity);
+    if (m_callbacks.on_trade) m_callbacks.on_trade(quantity, resting.price);
+    else std::cout << "2," << quantity << ',' << std::setprecision(15) << resting.price << '\n';
+
+    incoming.quantity -= quantity;
+    m_order_book.ReduceQuantity(resting_index, quantity, m_order_pool);
+    resting.quantity -= quantity;
+    if (incoming.quantity == 0) {
+        if (m_callbacks.on_fully_filled) m_callbacks.on_fully_filled(incoming.id);
+        else std::cout << "3," << incoming.id << '\n';
+    } else {
+        if (m_callbacks.on_partially_filled) m_callbacks.on_partially_filled(incoming.id, incoming.quantity);
+        else std::cout << "4," << incoming.id << ',' << incoming.quantity << '\n';
+    }
+    if (resting.quantity == 0) {
+        const OrderId id = resting.id;
+        if (m_callbacks.on_fully_filled) m_callbacks.on_fully_filled(id);
+        else std::cout << "3," << id << '\n';
+        RemoveRestingOrder(resting_index);
+    } else {
+        if (m_callbacks.on_partially_filled) m_callbacks.on_partially_filled(resting.id, resting.quantity);
+        else std::cout << "4," << resting.id << ',' << resting.quantity << '\n';
+    }
+}
+
+void MatchingEngine::Rest(const Order& incoming) {
+    const OrderIndex index = m_order_pool.Allocate(incoming);
+    if (index == kInvalidOrderIndex) { Error("Order pool capacity exceeded"); return; }
+    if (!m_order_manager.Add(incoming.id, index)) { m_order_pool.Free(index); Error("Order index capacity exceeded"); return; }
+    if (!m_order_book.Add(index, m_order_pool)) {
+        m_order_manager.Remove(incoming.id);
+        m_order_pool.Free(index);
+        Error("Price level pool capacity exceeded");
+    }
+}
+
+void MatchingEngine::RemoveRestingOrder(OrderIndex index) {
+    const OrderId id = m_order_pool.Get(index).id;
+    m_order_book.Remove(index, m_order_pool);
+    m_order_manager.Remove(id);
+    m_order_pool.Free(index);
+}
+
+void MatchingEngine::Error(const std::string& message) const {
+    if (m_callbacks.on_error) m_callbacks.on_error(message);
+    else std::cerr << message << '\n';
 }
 
 } // namespace nme

@@ -1,0 +1,7 @@
+// Rest a sell, then execute a partial buy at the resting sell price.
+0,1,1,100,10
+0,2,0,40,11
+
+// This buy does not cross and is then cancelled.
+0,3,0,100,9
+1,3

@@ -1,37 +1,41 @@
 #pragma once
 
+#include "order_book.hpp"
+
 #include <functional>
 #include <string>
 
 namespace nme {
 
-enum class Side { Buy = 0, Sell = 1 };
-
 struct EventCallbacks {
-    // trade qty and price
-    std::function<void(int, double)> on_trade;
-    // order fully filled
-    std::function<void(int)> on_filled;
-    // order partially filled with remaining qty
-    std::function<void(int, int)> on_partially_filled;
-    // error logging
-    std::function<void(const std::string &)> on_error;
+    std::function<void(Quantity, Price)> on_trade;
+    std::function<void(OrderId)> on_fully_filled;
+    std::function<void(OrderId, Quantity)> on_partially_filled;
+    std::function<void(const std::string&)> on_error;
 };
 
 class MatchingEngine {
 public:
-    explicit MatchingEngine(EventCallbacks cb = {});
+    static constexpr std::size_t kMaxOrders = 65'536;
+    static constexpr std::size_t kOrderIndexCapacity = 131'071;
 
-    // Process an input line like in requirement: either "0,orderid,side,quantity,price" or "1,orderid"
-    void process_message_line(const std::string &line);
+    explicit MatchingEngine(EventCallbacks callbacks = {});
 
-    // Lower-level API for tests
-    void add_order(int orderid, Side side, int qty, double price);
-    void cancel_order(int orderid);
+    void OnInput(const std::string& line);
+    void OnAddOrder(OrderId order_id, Side side, Quantity quantity, Price price);
+    void OnCancelOrder(OrderId order_id);
 
 private:
-    struct Impl;
-    Impl *p;
+    void Match(Order& incoming);
+    void Execute(Order& incoming, OrderIndex resting_index);
+    void Rest(const Order& incoming);
+    void RemoveRestingOrder(OrderIndex index);
+    void Error(const std::string& message) const;
+
+    EventCallbacks m_callbacks;
+    OrderPool<kMaxOrders> m_order_pool;
+    OrderManager<kOrderIndexCapacity> m_order_manager;
+    OrderBook<kMaxOrders> m_order_book;
 };
 
 } // namespace nme
